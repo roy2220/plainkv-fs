@@ -11,6 +11,9 @@ sudo yum install -y fuse
 # Ubuntu
 sudo apt-get install -y fuse
 
+# MacOS, download and install osxfuse =>
+open https://osxfuse.github.io
+
 ```
 
 ## Mounting
