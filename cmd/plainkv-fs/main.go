@@ -35,14 +35,13 @@ func (d dir) Attr(_ context.Context, attr *fuse.Attr) error {
 	rawName := []byte(d.Name)
 	orderedDictLock.RLock()
 	defer orderedDictLock.RUnlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
 
-	if it.IsAtEnd() {
+	if _, ok := orderedDict.Test(rawName, false); !ok {
+		if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
+			return syscall.ENOTDIR
+		}
+
 		return syscall.ENOENT
-	}
-
-	if key, _ := it.ReadKeyAll(); string(key) != d.Name {
-		return syscall.ENOTDIR
 	}
 
 	return nil
@@ -52,18 +51,16 @@ func (d dir) Open(_ context.Context, req *fuse.OpenRequest, resp *fuse.OpenRespo
 	rawName := []byte(d.Name)
 	orderedDictLock.RLock()
 	defer orderedDictLock.RUnlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
 
-	if it.IsAtEnd() {
+	if _, ok := orderedDict.Test(rawName, false); !ok {
+		if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
+			return nil, syscall.ENOTDIR
+		}
+
 		return nil, syscall.ENOENT
 	}
 
-	if key, _ := it.ReadKeyAll(); string(key) != d.Name {
-		return nil, syscall.ENOTDIR
-	}
-
-	dirHandle := d.AddRef()
-	return dirHandle, nil
+	return d.AddRef(), nil
 }
 
 func (d dir) Lookup(_ context.Context, name string) (fs.Node, error) {
@@ -71,21 +68,16 @@ func (d dir) Lookup(_ context.Context, name string) (fs.Node, error) {
 	rawName := []byte(name)
 	orderedDictLock.RLock()
 	defer orderedDictLock.RUnlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
 
-	if it.IsAtEnd() {
+	if _, ok := orderedDict.Test(rawName, false); !ok {
+		if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
+			return makeFile(name[:len(name)-1]), nil
+		}
+
 		return nil, syscall.ENOENT
 	}
 
-	var node fs.Node
-
-	if key, _ := it.ReadKeyAll(); string(key) == name {
-		node = makeDir(name)
-	} else {
-		node = makeFile(name[:len(name)-1])
-	}
-
-	return node, nil
+	return makeDir(name), nil
 }
 
 func (d dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error) {
@@ -93,9 +85,12 @@ func (d dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error)
 	rawName := []byte(name)
 	orderedDictLock.Lock()
 	defer orderedDictLock.Unlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
 
-	if !it.IsAtEnd() {
+	if _, ok := orderedDict.Test(rawName, false); ok {
+		return nil, syscall.EEXIST
+	}
+
+	if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
 		return nil, syscall.EEXIST
 	}
 
@@ -108,16 +103,18 @@ func (d dir) Create(_ context.Context, req *fuse.CreateRequest, resp *fuse.Creat
 	rawName := []byte(name)
 	orderedDictLock.Lock()
 	defer orderedDictLock.Unlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
 
-	if !it.IsAtEnd() {
+	if _, ok := orderedDict.Test(rawName, false); ok {
+		return nil, nil, syscall.EEXIST
+	}
+
+	if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
 		return nil, nil, syscall.EEXIST
 	}
 
 	orderedDict.Set(rawName[:len(rawName)-1], nil, false)
 	file := makeFile(name[:len(name)-1])
-	fileHandle := file.AddRef()
-	return file, fileHandle, nil
+	return file, file.AddRef(), nil
 }
 
 func (d dir) Remove(_ context.Context, req *fuse.RemoveRequest) error {
@@ -125,14 +122,15 @@ func (d dir) Remove(_ context.Context, req *fuse.RemoveRequest) error {
 	rawName := []byte(name)
 	orderedDictLock.Lock()
 	defer orderedDictLock.Unlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
+	_, ok1 := orderedDict.Test(rawName, false)
+	_, ok2 := orderedDict.Test(rawName[:len(rawName)-1], false)
 
-	if it.IsAtEnd() {
-		return syscall.ENOENT
+	if !ok1 && !ok2 {
+		return syscall.ENOTDIR
 	}
 
 	if req.Dir {
-		if key, _ := it.ReadKeyAll(); string(key) != name {
+		if !ok1 {
 			return syscall.ENOTDIR
 		}
 
@@ -140,7 +138,7 @@ func (d dir) Remove(_ context.Context, req *fuse.RemoveRequest) error {
 			return syscall.EBUSY
 		}
 
-		it = orderedDict.RangeAsc([]byte(string(rawName)+string('\x00')), plainkv.MaxKey)
+		it := orderedDict.RangeAsc([]byte(string(rawName)+string('\x00')), plainkv.MaxKey)
 
 		if key, err := it.ReadKeyAll(); err == nil && bytes.HasPrefix(key, rawName) {
 			return syscall.ENOTEMPTY
@@ -148,7 +146,7 @@ func (d dir) Remove(_ context.Context, req *fuse.RemoveRequest) error {
 
 		orderedDict.Clear(rawName, false)
 	} else {
-		if key, _ := it.ReadKeyAll(); string(key) == name {
+		if !ok2 {
 			return syscall.EISDIR
 		}
 
@@ -232,14 +230,14 @@ func (f file) Attr(_ context.Context, attr *fuse.Attr) error {
 	rawName := []byte(name)
 	orderedDictLock.RLock()
 	defer orderedDictLock.RUnlock()
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
+	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName[:len(rawName)-1])
 
 	if it.IsAtEnd() {
-		return syscall.ENOENT
-	}
+		if _, ok := orderedDict.Test(rawName, false); ok {
+			return syscall.EISDIR
+		}
 
-	if key, _ := it.ReadKeyAll(); string(key) == name {
-		return syscall.EISDIR
+		return syscall.ENOENT
 	}
 
 	valueSize, _ := it.GetValueSize()
@@ -259,28 +257,24 @@ func (f file) Open(_ context.Context, req *fuse.OpenRequest, resp *fuse.OpenResp
 		defer orderedDictLock.Unlock()
 	}
 
-	it := orderedDict.RangeAsc(rawName[:len(rawName)-1], rawName)
+	if _, ok := orderedDict.Test(rawName[:len(rawName)-1], false); ok {
+		if req.Flags&fuse.OpenTruncate != 0 {
+			orderedDict.Set(rawName[:len(rawName)-1], nil, false)
+		}
+	} else {
+		if _, ok := orderedDict.Test(rawName, false); ok {
+			return nil, syscall.EISDIR
+		}
 
-	if it.IsAtEnd() {
 		if req.Flags&fuse.OpenCreate == 0 {
 			return nil, syscall.ENOENT
 		}
 
 		orderedDict.Set(rawName[:len(rawName)-1], nil, false)
-		fileHandle := f.AddRef()
-		return fileHandle, nil
+		return f.AddRef(), nil
 	}
 
-	if key, _ := it.ReadKeyAll(); string(key) == name {
-		return nil, syscall.EISDIR
-	}
-
-	if req.Flags&fuse.OpenTruncate != 0 {
-		orderedDict.Set(rawName[:len(rawName)-1], nil, false)
-	}
-
-	fileHandle := f.AddRef()
-	return fileHandle, nil
+	return f.AddRef(), nil
 }
 
 func (f file) AddRef() *fileHandle {
@@ -389,7 +383,7 @@ func main() {
 	flag.Parse()
 
 	if flag.NArg() != 2 {
-		fmt.Printf("usage: %s <db file> <mount point>", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s <db file> <mount point>\n", os.Args[0])
 		os.Exit(2)
 	}
 
