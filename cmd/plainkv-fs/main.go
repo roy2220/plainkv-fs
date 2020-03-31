@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sync"
 	"syscall"
 
@@ -414,6 +415,22 @@ func main() {
 	}
 
 	defer conn.Close()
+
+	go func() {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt)
+
+		for {
+			<-signals
+			err := fuse.Unmount(mountPointName)
+
+			if err == nil {
+				break
+			}
+
+			fmt.Fprintf(os.Stderr, "unmount failed: %v\n", err)
+		}
+	}()
 
 	if err := fs.Serve(conn, fs1{}); err != nil {
 		panic(err)

@@ -2,7 +2,7 @@
 
 An FUSE wrapper around [PlainKV](https://github.com/roy2220/plainkv)
 
-# Requirements
+## Requirements
 
 ```bash
 # Fedora
@@ -13,21 +13,20 @@ sudo apt-get install -y fuse
 
 ```
 
-## Mounting file system
+## Mounting
 
 ```bash
 go get github.com/roy2220/plainkv-fs/cmd/plainkv-fs
 go build -o plainkv-fs github.com/roy2220/plainkv-fs/cmd/plainkv-fs
 
 mkdir -p ./my_mnt
-nohup ./plainkv-fs ./test.db ./my_mnt > ./test.log 2>&1 &
+./plainkv-fs ./test.db ./my_mnt
+# get blocked, send CTRL-C to stop.
+```
 
+## Testing
+
+```bash
 echo 'hello world!' > ./my_mnt/a.txt
 cat ./my_mnt/a.txt
-```
-
-## Unmounting file system
-
-```
-fusermount -u ./my_mnt
 ```
